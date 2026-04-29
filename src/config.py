@@ -1,11 +1,9 @@
-"""Centralized application configuration for the Whisper transcriber project."""
-
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, Sequence, cast
 
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
 LOGS_DIR: Path = Path.home() / ".local" / "share" / "whisper-transcriber"
@@ -20,7 +18,6 @@ ModelComputeType = Literal["float16", "int8", "float32"]
 
 
 def _literal_from_env(value: str | None, allowed: Sequence[str], default: str) -> str:
-    """Return a sanitized env value, or a safe default when invalid/missing."""
     if value is None:
         return default
     normalized: str = value.strip().lower()
@@ -49,7 +46,7 @@ class ModelConfig:
 
 @dataclass
 class HotkeyConfig:
-    combination: str = "<shift>+<f1>"
+    combination: str = "<ctrl>+<shift>+space"
 
 
 @dataclass
@@ -60,11 +57,6 @@ class UIConfig:
     min_height: int = 300
     always_on_top: bool = True
     auto_start_recording: bool = False
-    font_family: str = "Inter"
-    font_family_fallback: str = "Helvetica"
-    font_size_text: int = 13
-    font_size_label: int = 11
-    font_size_btn: int = 11
 
 
 AUDIO: AudioConfig = AudioConfig()
@@ -86,9 +78,9 @@ _default_compute_type: str = _literal_from_env(
 )
 
 MODEL: ModelConfig = ModelConfig(
-    size=_default_size,  # type: ignore[arg-type]
-    device=_default_device,  # type: ignore[arg-type]
-    compute_type=_default_compute_type,  # type: ignore[arg-type]
+    size=cast(ModelSize, _default_size),
+    device=cast(ModelDevice, _default_device),
+    compute_type=cast(ModelComputeType, _default_compute_type),
 )
 HOTKEY: HotkeyConfig = HotkeyConfig()
 UI: UIConfig = UIConfig()
