@@ -1,5 +1,3 @@
-"""Audio capture agent backed by sounddevice InputStream."""
-
 from __future__ import annotations
 
 import queue
@@ -13,8 +11,8 @@ from src.config import AudioConfig
 from src.logger import get_logger
 
 try:
-    import sounddevice as sd  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover - exercised by runtime envs without sounddevice
+    import sounddevice as sd
+except Exception:
     sd = None
 
 
@@ -22,17 +20,20 @@ logger = get_logger(__name__)
 
 
 class AudioAgent:
-    """Capture microphone chunks and enqueue them for transcription."""
-
-    def __init__(self, queue_obj: queue.Queue[NDArray[np.float32]], config: AudioConfig) -> None:
+    def __init__(
+        self,
+        queue_obj: queue.Queue[NDArray[np.float32]],
+        config: AudioConfig,
+        on_level: Any | None = None,
+    ) -> None:
         self._queue: queue.Queue[NDArray[np.float32]] = queue_obj
         self._config: AudioConfig = config
+        self._on_level = on_level  # Callable[[float], None] for waveform
         self._stream: Any | None = None
         self._state_recording: bool = False
         self._state_lock = threading.Lock()
 
     def start(self) -> None:
-        """Start audio capture stream."""
         with self._state_lock:
             if self._state_recording:
                 return
@@ -51,7 +52,6 @@ class AudioAgent:
             logger.info("Audio stream started")
 
     def stop(self) -> None:
-        """Stop audio stream and drain pending chunks."""
         with self._state_lock:
             self._state_recording = False
             stream = self._stream
@@ -81,14 +81,22 @@ class AudioAgent:
         time: Any,
         status: Any,
     ) -> None:
-        """Sounddevice callback: copy and enqueue quickly, never block."""
         if status:
             logger.warning("Audio callback status: %s", status)
 
         if not self._state_recording:
             return
 
+        data = indata.copy()
+
+        if self._on_level is not None:
+            try:
+                rms = float(np.sqrt(np.mean(data**2)))
+                self._on_level(rms)
+            except Exception:
+                pass
+
         try:
-            self._queue.put_nowait(indata.copy())
+            self._queue.put_nowait(data)
         except queue.Full:
             logger.warning("Audio queue full; dropping chunk of %s frames", frames)
