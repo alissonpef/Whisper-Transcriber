@@ -1,5 +1,3 @@
-"""UI behavior helpers shared by popup components."""
-
 from __future__ import annotations
 
 import tkinter as tk
@@ -8,8 +6,6 @@ from src.ui.theme import Theme
 
 
 class StatusDotAnimator:
-    """Animate the recording/status dot based on popup lifecycle state."""
-
     def __init__(self, root: tk.Tk, canvas: tk.Canvas, dot_id: int) -> None:
         self._root = root
         self._canvas = canvas
@@ -53,7 +49,6 @@ class StatusDotAnimator:
 
 
 def fade_in(root: tk.Tk, alpha: float = 0.0) -> None:
-    """Apply a short fade-in animation for popup open."""
     if alpha >= 1.0:
         root.attributes("-alpha", 1.0)
         return

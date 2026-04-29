@@ -1,18 +1,14 @@
-"""Reusable tkinter UI components for the transcriber popup."""
-
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Callable, Literal
-
+from typing import Any, Callable, Literal
 from src.ui.theme import Theme
 
 ButtonVariant = Literal["primary", "danger", "ghost"]
 
 
 def _adjust_color(hex_color: str, amount: int) -> str:
-    """Lighten or darken a #RRGGBB color by an integer amount."""
     color = hex_color[:7]
     red = int(color[1:3], 16)
     green = int(color[3:5], 16)
@@ -25,8 +21,6 @@ def _adjust_color(hex_color: str, amount: int) -> str:
 
 
 class StatusBar(tk.Frame):
-    """Top status row with state text and right-side metadata."""
-
     def __init__(self, parent: tk.Misc) -> None:
         super().__init__(parent, bg=Theme.BG_PRIMARY, height=28, highlightthickness=1)
         self.configure(highlightbackground=Theme.BORDER)
@@ -60,8 +54,6 @@ class StatusBar(tk.Frame):
 
 
 class TranscriptArea(tk.Frame):
-    """Editable transcript text area with styled vertical scrollbar."""
-
     def __init__(self, parent: tk.Misc) -> None:
         super().__init__(parent, bg=Theme.BG_SECONDARY)
 
@@ -123,8 +115,6 @@ class TranscriptArea(tk.Frame):
 
 
 class ActionButton(tk.Button):
-    """Themed button with visual variants and hover behavior."""
-
     def __init__(
         self,
         parent: tk.Misc,
@@ -183,8 +173,6 @@ class ActionButton(tk.Button):
 
 
 class LoadingSpinner(tk.Frame):
-    """Overlay loading panel with indeterminate progress and animated dots."""
-
     def __init__(self, parent: tk.Misc) -> None:
         super().__init__(parent, bg=Theme.BG_PRIMARY)
         self._running: bool = False
@@ -236,3 +224,85 @@ class LoadingSpinner(tk.Frame):
         self._message.configure(text=f"{self._message_base}{dots}")
         self._dot_index += 1
         self.after(350, self._animate_dots)
+
+
+class AudioWaveform(tk.Frame):
+    BAR_COUNT: int = 40
+    BAR_WIDTH: int = 3
+    BAR_GAP: int = 2
+    HEIGHT: int = 36
+    UPDATE_MS: int = 45
+
+    COLOR_ACTIVE: str = Theme.WAVEFORM_ACTIVE
+    COLOR_IDLE: str = Theme.WAVEFORM_IDLE
+
+    def __init__(self, parent: tk.Misc) -> None:
+        super().__init__(parent, bg=Theme.BG_PRIMARY, height=self.HEIGHT)
+        self.pack_propagate(False)
+
+        total_w = self.BAR_COUNT * (self.BAR_WIDTH + self.BAR_GAP)
+        self._canvas = tk.Canvas(
+            self,
+            width=total_w,
+            height=self.HEIGHT,
+            bg=Theme.BG_PRIMARY,
+            highlightthickness=0,
+        )
+        self._canvas.pack(expand=True)
+
+        self._bars: list[int] = []
+        self._levels: list[float] = [0.0] * self.BAR_COUNT
+        self._running: bool = False
+        self._latest_rms: float = 0.0
+
+        for i in range(self.BAR_COUNT):
+            x0 = i * (self.BAR_WIDTH + self.BAR_GAP)
+            x1 = x0 + self.BAR_WIDTH
+            bar_id = self._canvas.create_rectangle(
+                x0,
+                self.HEIGHT,
+                x1,
+                self.HEIGHT,
+                fill=self.COLOR_IDLE,
+                outline="",
+            )
+            self._bars.append(bar_id)
+
+    def set_level(self, rms: float) -> None:
+        self._latest_rms = rms
+
+    def start(self, audio_queue: Any = None) -> None:
+        if not self._running:
+            self._running = True
+            self._animate()
+
+    def stop(self) -> None:
+        self._running = False
+        self._latest_rms = 0.0
+        self._levels = [0.0] * self.BAR_COUNT
+        self._draw_bars()
+
+    def _animate(self) -> None:
+        if not self._running:
+            return
+
+        rms = min(self._latest_rms * 8.0, 1.0)  # Amplify and clamp.
+        self._levels.pop(0)
+        self._levels.append(rms)
+
+        self._latest_rms *= 0.85
+
+        self._draw_bars()
+        self.after(self.UPDATE_MS, self._animate)
+
+    def _draw_bars(self) -> None:
+        for i, level in enumerate(self._levels):
+            bar_h = max(2, int(level * (self.HEIGHT - 4)))
+            y0 = self.HEIGHT - bar_h
+            x0 = i * (self.BAR_WIDTH + self.BAR_GAP)
+            x1 = x0 + self.BAR_WIDTH
+            color = (
+                self.COLOR_ACTIVE if self._running and level > 0.02 else self.COLOR_IDLE
+            )
+            self._canvas.coords(self._bars[i], x0, y0, x1, self.HEIGHT)
+            self._canvas.itemconfig(self._bars[i], fill=color)
