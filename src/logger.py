@@ -1,5 +1,3 @@
-"""Centralized logging setup used across all application modules."""
-
 from __future__ import annotations
 
 import logging
@@ -9,7 +7,6 @@ from src.config import LOGS_DIR
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a configured logger with file and console handlers."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     logger: logging.Logger = logging.getLogger(name)
@@ -19,9 +16,7 @@ def get_logger(name: str) -> logging.Logger:
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     file_handler = logging.FileHandler(Path(LOGS_DIR) / "app.log")
     file_handler.setLevel(logging.DEBUG)
