@@ -1,11 +1,6 @@
-"""Clipboard helpers with Linux backend fallbacks and safe error handling."""
-
 from __future__ import annotations
-
 import shutil
 import subprocess
-from typing import Iterable
-
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -45,10 +40,7 @@ def _read_with_command(command: list[str]) -> str:
 
 
 def copy_to_clipboard(text: str) -> bool:
-    """Copy text to the system clipboard.
 
-    Backends are tried in this order: xclip, xsel, wl-copy, pyperclip.
-    """
     command_candidates: list[tuple[str, list[str]]] = [
         ("xclip", ["xclip", "-selection", "clipboard"]),
         ("xsel", ["xsel", "--clipboard", "--input"]),
@@ -60,7 +52,7 @@ def copy_to_clipboard(text: str) -> bool:
             return True
 
     try:
-        import pyperclip  # type: ignore[import-untyped]
+        import pyperclip
 
         pyperclip.copy(text)
         return True
@@ -70,7 +62,6 @@ def copy_to_clipboard(text: str) -> bool:
 
 
 def get_from_clipboard() -> str:
-    """Get text from the system clipboard or return an empty string."""
     command_candidates: list[tuple[str, list[str]]] = [
         ("xclip", ["xclip", "-selection", "clipboard", "-o"]),
         ("xsel", ["xsel", "--clipboard", "--output"]),
@@ -85,7 +76,7 @@ def get_from_clipboard() -> str:
             return output
 
     try:
-        import pyperclip  # type: ignore[import-untyped]
+        import pyperclip
 
         return str(pyperclip.paste())
     except Exception:
