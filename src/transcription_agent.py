@@ -1,5 +1,3 @@
-"""Transcription worker that consumes audio chunks and emits text results."""
-
 from __future__ import annotations
 
 import copy
@@ -17,7 +15,11 @@ logger = get_logger(__name__)
 
 
 class TranscriptionAgent:
-    """Background worker that transcribes buffered chunks with Whisper."""
+    MAX_SEGMENT_SECS: float = 20.0
+
+    SILENCE_FLUSH_COUNT: int = 6
+
+    MIN_RMS_THRESHOLD: float = 0.003
 
     def __init__(
         self,
@@ -38,7 +40,6 @@ class TranscriptionAgent:
         self._active_compute_type: str = self._config.compute_type
 
     def load_model(self, on_progress: Callable[[str], None] | None = None) -> None:
-        """Load Whisper model once, trying CPU fallback when configured."""
         if self._model is not None:
             if on_progress:
                 on_progress("model-ready")
@@ -47,7 +48,7 @@ class TranscriptionAgent:
         if on_progress:
             on_progress("loading-model")
 
-        from faster_whisper import WhisperModel  # type: ignore[import-untyped]
+        from faster_whisper import WhisperModel
 
         try:
             self._model = WhisperModel(
@@ -75,7 +76,6 @@ class TranscriptionAgent:
             on_progress("model-ready")
 
     def start(self) -> None:
-        """Start transcription worker thread."""
         if self._thread is not None and self._thread.is_alive():
             return
 
@@ -86,7 +86,6 @@ class TranscriptionAgent:
         logger.info("Transcription agent started")
 
     def stop(self) -> None:
-        """Stop worker thread and release pending queue items quickly."""
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
@@ -101,53 +100,71 @@ class TranscriptionAgent:
         logger.info("Transcription agent stopped")
 
     def get_runtime_details(self) -> tuple[str, str, str]:
-        """Return current model, device, and compute type used by the worker."""
         return self._config.size, self._active_device, self._active_compute_type
 
     def _transcribe_loop(self) -> None:
-        buffer: list[NDArray[np.float32]] = []
-        buffered_frames: int = 0
-        required_frames: int = int(AUDIO.sample_rate * AUDIO.chunk_secs)
+        segment_buffer: list[NDArray[np.float32]] = []
+        segment_secs: float = 0.0
+        silence_counter: int = 0
 
         while not self._stop_event.is_set():
             try:
-                chunk = self._audio_queue.get(timeout=0.2)
-                buffer.append(chunk)
-                buffered_frames += int(chunk.shape[0])
+                chunk = self._audio_queue.get(timeout=0.15)
+                segment_buffer.append(chunk)
+                chunk_secs = chunk.shape[0] / AUDIO.sample_rate
+                segment_secs += chunk_secs
+                silence_counter = 0
 
-                if buffered_frames < required_frames:
-                    continue
+                if segment_secs >= self.MAX_SEGMENT_SECS:
+                    self._finalize_segment(segment_buffer)
+                    segment_buffer = []
+                    segment_secs = 0.0
 
-                merged: NDArray[np.float32] = np.concatenate(buffer, axis=0).reshape(-1)
-                buffer = []
-                buffered_frames = 0
-
-                self._run_transcription(merged)
             except queue.Empty:
-                continue
-            except Exception:
-                logger.exception("Unexpected transcription loop error")
+                silence_counter += 1
 
-    def _run_transcription(self, audio: NDArray[np.float32]) -> None:
-        if self._model is None:
+                if silence_counter >= self.SILENCE_FLUSH_COUNT and segment_buffer:
+                    self._finalize_segment(segment_buffer)
+                    segment_buffer = []
+                    segment_secs = 0.0
+                    silence_counter = 0
+
+            except Exception:
+                logger.exception("Transcription loop error")
+
+    def _finalize_segment(self, buffer: list[NDArray[np.float32]]) -> None:
+        audio = np.concatenate(buffer, axis=0).reshape(-1)
+
+        rms = float(np.sqrt(np.mean(audio**2)))
+        if rms < self.MIN_RMS_THRESHOLD:
+            logger.debug("Skipping silent segment (RMS=%.5f)", rms)
             return
 
+        text = self._transcribe_with_vad(audio)
+        if text and len(text.strip()) > 0:
+            cleaned = text.strip()
+            self._on_result(cleaned + " ")
+            logger.debug("Segment finalized: '%s'", cleaned[:80])
+
+    def _transcribe_with_vad(self, audio: NDArray[np.float32]) -> str:
+        if self._model is None:
+            return ""
+
         try:
-            text = self._transcribe_text(audio)
+            text = self._run_model_vad(audio)
             if text:
-                self._on_result(text)
+                return text
         except Exception as exc:
             if self._should_fallback_runtime(exc) and self._fallback_to_cpu():
                 try:
-                    text = self._transcribe_text(audio)
-                    if text:
-                        self._on_result(text)
-                    return
+                    return self._run_model_vad(audio)
                 except Exception:
                     logger.exception("CPU fallback retry failed")
             logger.exception("Model transcribe failed; continuing loop")
 
-    def _transcribe_text(self, audio: NDArray[np.float32]) -> str:
+        return ""
+
+    def _run_model_vad(self, audio: NDArray[np.float32]) -> str:
         if self._model is None:
             return ""
 
@@ -155,10 +172,23 @@ class TranscriptionAgent:
             audio,
             language=self._config.language,
             beam_size=self._config.beam_size,
+            vad_filter=True,
+            vad_parameters=dict(
+                threshold=0.45,
+                min_speech_duration_ms=300,
+                min_silence_duration_ms=500,
+            ),
+            condition_on_previous_text=False,
+            no_speech_threshold=0.6,
         )
-        return " ".join(
-            str(getattr(segment, "text", "")).strip() for segment in segments
-        ).strip()
+
+        parts: list[str] = []
+        for segment in segments:
+            text = str(getattr(segment, "text", "")).strip()
+            if text and len(text) > 1:
+                parts.append(text)
+
+        return " ".join(parts).strip()
 
     def _should_fallback_runtime(self, exc: Exception) -> bool:
         if not self._config.cpu_fallback or self._active_device == "cpu":
@@ -181,7 +211,7 @@ class TranscriptionAgent:
                 return True
 
             try:
-                from faster_whisper import WhisperModel  # type: ignore[import-untyped]
+                from faster_whisper import WhisperModel
 
                 logger.warning("Runtime CUDA failure; switching to CPU int8")
                 self._model = WhisperModel(
